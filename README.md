@@ -9,6 +9,18 @@
 
 ---
 
+## 📱 App Screenshots
+
+| Home Cinema & Shelves | Movie Details & Recommendations |
+| :---: | :---: |
+| <img src="screenshots/home_screen.jpg" width="300" alt="Home Screen" /> | <img src="screenshots/movie_detail.jpg" width="300" alt="Movie Detail" /> |
+
+| 16:9 Cinema Player & Gestures | Multi-Source Providers & Settings |
+| :---: | :---: |
+| <img src="screenshots/video_player.jpg" width="300" alt="Video Player" /> | <img src="screenshots/profile_sources.jpg" width="300" alt="Profile Settings" /> |
+
+---
+
 ## ✨ Key Features & Architecture
 
 ### ⚡ 1. 100% Serverless In-App Direct Scraper & Universal Stream Sniffer
