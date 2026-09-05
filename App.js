@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import * as ScreenOrientation from 'expo-screen-orientation';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Colors } from './src/theme/colors';
@@ -70,6 +71,18 @@ function MainApp() {
   useEffect(() => {
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
   }, []);
+
+  // Keep screen awake while a movie is actively playing in the app
+  useEffect(() => {
+    if (playingMovie && playbackStatus.isPlaying) {
+      activateKeepAwakeAsync('CinePremiumApp').catch(() => {});
+    } else {
+      deactivateKeepAwake('CinePremiumApp');
+    }
+    return () => {
+      deactivateKeepAwake('CinePremiumApp');
+    };
+  }, [playingMovie, playbackStatus.isPlaying]);
 
   // Handle Android Hardware Back Button
   useEffect(() => {

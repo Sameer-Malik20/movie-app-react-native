@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import { Video, ResizeMode, Audio } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
 import YoutubePlayer from 'react-native-youtube-iframe';
 import { userStore } from '../services/userStore';
@@ -251,6 +252,18 @@ export const VideoPlayer = ({
     zoomScale.setValue(1);
     currentScaleRef.current = 1.0;
   }, [ytVideoId, streamUrl]);
+
+  // Keep screen awake while video is actively playing (prevents screen turn-off)
+  useEffect(() => {
+    if (isPlaying) {
+      activateKeepAwakeAsync('CinePremiumPlayer').catch(() => {});
+    } else {
+      deactivateKeepAwake('CinePremiumPlayer');
+    }
+    return () => {
+      deactivateKeepAwake('CinePremiumPlayer');
+    };
+  }, [isPlaying]);
 
   // Resume Playback Toast Badge
   const [resumeToast, setResumeToast] = useState(null);
