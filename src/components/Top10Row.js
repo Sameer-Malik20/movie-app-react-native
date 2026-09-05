@@ -1,14 +1,16 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image } from 'react-native';
 import { Colors } from '../theme/colors';
+import { useTheme } from '../theme/ThemeContext';
 
 export const Top10Row = ({ movies, onMoviePress }) => {
+  const { colors } = useTheme();
   if (!movies || movies.length === 0) return null;
 
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
-        <Text style={styles.sectionTitle}>Top 10 in India Today</Text>
+        <Text style={[styles.sectionTitle, { color: colors.onSurface }]}>Top 10 in India Today</Text>
       </View>
 
       <ScrollView

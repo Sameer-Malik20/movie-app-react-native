@@ -2,31 +2,73 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../theme/colors';
+import { useTheme } from '../theme/ThemeContext';
 
 export const Header = ({ onSearchPress, onProfilePress }) => {
+  const { isDark, colors, toggleTheme } = useTheme();
+
   return (
-    <View style={styles.container}>
+    <View
+      style={[
+        styles.container,
+        {
+          backgroundColor: isDark ? 'rgba(5, 20, 36, 0.95)' : 'rgba(255, 255, 255, 0.96)',
+          borderBottomColor: colors.outlineVariant,
+        },
+      ]}
+    >
       <View style={styles.brandRow}>
         <Image
           source={require('../../assets/icon.png')}
           style={styles.logoImg}
           resizeMode="cover"
         />
-        <Text style={styles.brandTitle}>CINE<Text style={styles.brandHighlight}>PREMIUM</Text></Text>
+        <Text style={[styles.brandTitle, { color: colors.onSurface }]}>
+          CINE<Text style={[styles.brandHighlight, { color: colors.primary }]}>PREMIUM</Text>
+        </Text>
       </View>
 
       <View style={styles.actionRow}>
-        <TouchableOpacity style={styles.iconBtn} onPress={onSearchPress} activeOpacity={0.7}>
-          <Ionicons name="search" size={20} color={Colors.onSurface} />
+        {/* Dark / Light Theme Quick Toggle */}
+        <TouchableOpacity
+          style={[
+            styles.iconBtn,
+            {
+              backgroundColor: colors.surfaceContainer,
+              borderColor: colors.outlineVariant,
+            },
+          ]}
+          onPress={toggleTheme}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name={isDark ? 'sunny' : 'moon'}
+            size={19}
+            color={isDark ? '#fbbf24' : colors.primary}
+          />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.iconBtn,
+            {
+              backgroundColor: colors.surfaceContainer,
+              borderColor: colors.outlineVariant,
+            },
+          ]}
+          onPress={onSearchPress}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="search" size={20} color={colors.onSurface} />
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.avatarBtn} onPress={onProfilePress} activeOpacity={0.7}>
           <Image
             source={require('../../assets/icon.png')}
-            style={styles.avatarImg}
+            style={[styles.avatarImg, { borderColor: colors.primary }]}
             resizeMode="cover"
           />
-          <View style={styles.vipDot} />
+          <View style={[styles.vipDot, { backgroundColor: colors.primary, borderColor: colors.background }]} />
         </TouchableOpacity>
       </View>
     </View>

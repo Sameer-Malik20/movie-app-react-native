@@ -17,15 +17,121 @@ import {
   Animated,
   Pressable,
 } from 'react-native';
-import { Video, ResizeMode } from 'expo-av';
+import { Video, ResizeMode, Audio } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
+import YoutubePlayer from 'react-native-youtube-iframe';
 import { userStore } from '../services/userStore';
 import { cleanMovieTitle } from '../services/api';
+import { extractYouTubeId } from '../services/youtubeService';
 import { Colors } from '../theme/colors';
+import { useTheme } from '../theme/ThemeContext';
 
-export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
+const YOUTUBE_ADBLOCK_INJECTED_JS = `
+  (function() {
+    // 1. Inject CSS to hide ad containers and promo banners
+    var css = \`
+      .ytp-ad-module,
+      .ytp-ad-overlay-container,
+      .ytp-ad-message-container,
+      .ytp-ad-text-overlay,
+      .ytp-suggested-action,
+      .video-ads,
+      .ytp-ad-player-overlay,
+      .ytp-ad-image-overlay,
+      #player-ads,
+      .sparkles-light-cta,
+      .annotation,
+      .ytp-paid-content-overlay {
+        display: none !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+        width: 0 !important;
+      }
+    \`;
+    var style = document.createElement('style');
+    style.type = 'text/css';
+    style.appendChild(document.createTextNode(css));
+    (document.head || document.documentElement).appendChild(style);
+
+    function killAds() {
+      // 2. Instantly click skip ad buttons
+      var skipSelectors = [
+        '.ytp-ad-skip-button',
+        '.ytp-ad-skip-button-modern',
+        '.ytp-skip-ad-button',
+        '.videoAdUiSkipButton',
+        '.ytp-ad-skip-button-slot button',
+        'button.ytp-ad-skip-button',
+        '[id^="skip-button"]'
+      ];
+      for (var s = 0; s < skipSelectors.length; s++) {
+        var btns = document.querySelectorAll(skipSelectors[s]);
+        for (var b = 0; b < btns.length; b++) {
+          if (btns[b] && typeof btns[b].click === 'function') {
+            btns[b].click();
+          }
+        }
+      }
+
+      // 3. Fast-forward video ads to end instantly & mute during ad
+      var adShowing = document.querySelector('.ad-showing, .ad-interrupting, .ytp-ad-player-overlay');
+      var videos = document.querySelectorAll('video');
+      for (var v = 0; v < videos.length; v++) {
+        var vid = videos[v];
+        if (adShowing && vid) {
+          try {
+            vid.muted = true;
+            vid.playbackRate = 16.0;
+            if (!isNaN(vid.duration) && isFinite(vid.duration) && vid.duration > 0) {
+              vid.currentTime = vid.duration;
+            }
+          } catch (e) {}
+        }
+      }
+
+      // 4. Auto-trigger direct playback on initial load
+      var bigPlayBtn = document.querySelector('.ytp-large-play-button, .ytp-cued-thumbnail-overlay');
+      if (bigPlayBtn && typeof bigPlayBtn.click === 'function' && bigPlayBtn.offsetParent !== null) {
+        bigPlayBtn.click();
+      }
+      for (var p = 0; p < videos.length; p++) {
+        if (!adShowing && videos[p] && videos[p].paused) {
+          videos[p].play().catch(function() {});
+        }
+      }
+    }
+
+    // High frequency interval check
+    setInterval(killAds, 100);
+
+    // Mutation observer for zero-latency detection
+    try {
+      var observer = new MutationObserver(killAds);
+      observer.observe(document.body || document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true
+      });
+    } catch (e) {}
+  })();
+  true;
+`;
+
+export const VideoPlayer = ({
+  streamUrl,
+  title,
+  referer,
+  movie,
+  onClose,
+  onMinimize,
+  onPlaybackUpdate,
+}) => {
+  const { isDark, colors } = useTheme();
   const videoRef = useRef(null);
+  const ytPlayerRef = useRef(null);
   const controlsTimeoutRef = useRef(null);
   const singleTapTimerRef = useRef(null);
   const lastTapRef = useRef({ time: 0, x: 0 });
@@ -33,9 +139,14 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
   const lastSavedTimeRef = useRef(0);
 
   const movieObj = movie || { link: streamUrl, title: title || 'Movie Stream', streamUrl };
+  const ytVideoId =
+    movieObj?.videoId ||
+    extractYouTubeId(streamUrl) ||
+    extractYouTubeId(movieObj?.link) ||
+    extractYouTubeId(movieObj?.streamUrl);
 
   const [dimensions, setDimensions] = useState(Dimensions.get('window'));
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(true);
   const [isBuffering, setIsBuffering] = useState(true);
   const [positionMillis, setPositionMillis] = useState(0);
   const [durationMillis, setDurationMillis] = useState(0);
@@ -45,9 +156,101 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
   const [resizeMode, setResizeMode] = useState(ResizeMode.CONTAIN);
   const [selectedQuality, setSelectedQuality] = useState('Auto (Adaptive)');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [isLandscape, setIsLandscape] = useState(true);
+  const [isLandscape, setIsLandscape] = useState(!ytVideoId);
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+
+  // YouTube & Cinema Pinch-to-Zoom (Pinch out = Zoom to fill, Pinch in = Original)
+  const zoomScale = useRef(new Animated.Value(1)).current;
+  const currentScaleRef = useRef(1.0);
+  const pinchStartDistRef = useRef(0);
+  const pinchStartScaleRef = useRef(1.0);
+  const isPinchingRef = useRef(false);
+
+  // YouTube Pinch-to-Zoom Toast Badge State
+  const [zoomToast, setZoomToast] = useState(null);
+  const zoomToastAnim = useRef(new Animated.Value(0)).current;
+  const zoomToastTimerRef = useRef(null);
+
+  const getPinchDistance = (touches) => {
+    if (!touches || touches.length < 2) return 0;
+    const t0 = touches[0];
+    const t1 = touches[1];
+    return Math.hypot(t0.pageX - t1.pageX, t0.pageY - t1.pageY);
+  };
+
+  const showZoomToast = (text, isZoomed) => {
+    if (zoomToastTimerRef.current) {
+      clearTimeout(zoomToastTimerRef.current);
+    }
+    setZoomToast({ text, isZoomed });
+    zoomToastAnim.setValue(0);
+    Animated.spring(zoomToastAnim, {
+      toValue: 1,
+      tension: 60,
+      friction: 8,
+      useNativeDriver: true,
+    }).start();
+
+    zoomToastTimerRef.current = setTimeout(() => {
+      Animated.timing(zoomToastAnim, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }).start(() => {
+        setZoomToast(null);
+      });
+    }, 1500);
+  };
+
+  const finalizeZoom = () => {
+    const finalScale = currentScaleRef.current;
+    if (finalScale > 1.12) {
+      // Zoomed to fill screen
+      const targetFill = 1.30;
+      Animated.spring(zoomScale, {
+        toValue: targetFill,
+        friction: 7,
+        tension: 40,
+        useNativeDriver: true,
+      }).start();
+      currentScaleRef.current = targetFill;
+      showZoomToast('Zoomed to fill', true);
+    } else {
+      // Snap back to Original aspect ratio
+      Animated.spring(zoomScale, {
+        toValue: 1.0,
+        friction: 7,
+        tension: 40,
+        useNativeDriver: true,
+      }).start();
+      currentScaleRef.current = 1.0;
+      showZoomToast('Original', false);
+    }
+  };
+
+  const handlePinchMove = (evt) => {
+    if (!evt.nativeEvent.touches || evt.nativeEvent.touches.length < 2) return;
+    const currentDist = getPinchDistance(evt.nativeEvent.touches);
+    if (!isPinchingRef.current || pinchStartDistRef.current <= 0) {
+      isPinchingRef.current = true;
+      pinchStartDistRef.current = currentDist;
+      pinchStartScaleRef.current = currentScaleRef.current;
+      return;
+    }
+    const factor = currentDist / pinchStartDistRef.current;
+    let targetScale = pinchStartScaleRef.current * factor;
+    targetScale = Math.max(0.85, Math.min(targetScale, 2.5));
+    zoomScale.setValue(targetScale);
+    currentScaleRef.current = targetScale;
+  };
+
+  // Reset zoom & ensure immediate autoplay when media changes
+  useEffect(() => {
+    setIsPlaying(true);
+    zoomScale.setValue(1);
+    currentScaleRef.current = 1.0;
+  }, [ytVideoId, streamUrl]);
 
   // Resume Playback Toast Badge
   const [resumeToast, setResumeToast] = useState(null);
@@ -107,20 +310,107 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
 
   const activeStream = streamUrl || 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
 
-  // 1. Lock screen to 16:9 landscape cinema mode on open, unlock on exit
+  // Background Audio Configuration (VIP Playback)
+  useEffect(() => {
+    let mounted = true;
+    async function configureAudio() {
+      try {
+        await Audio.setAudioModeAsync({
+          staysActiveInBackground: true,
+          playsInSilentModeIOS: true,
+          shouldDuckAndroid: false,
+        });
+      } catch (e) {
+        console.log('Background Audio init error:', e.message);
+      }
+    }
+    configureAudio();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // YouTube Real-time Position & Duration Tracker
+  useEffect(() => {
+    if (!ytVideoId) return;
+    const interval = setInterval(async () => {
+      if (ytPlayerRef.current && isPlaying) {
+        try {
+          const cur = await ytPlayerRef.current.getCurrentTime();
+          const dur = await ytPlayerRef.current.getDuration();
+          if (typeof cur === 'number' && cur >= 0) {
+            const curMs = cur * 1000;
+            setPositionMillis(curMs);
+            stateRef.current.positionMillis = curMs;
+          }
+          if (typeof dur === 'number' && dur > 0) {
+            const durMs = dur * 1000;
+            setDurationMillis(durMs);
+            stateRef.current.durationMillis = durMs;
+          }
+        } catch (e) {}
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [ytVideoId, isPlaying]);
+
+  // Sync playback status with parent for MiniPlayer (guarded to prevent re-render storms)
+  const onPlaybackUpdateRef = useRef(onPlaybackUpdate);
+  useEffect(() => {
+    onPlaybackUpdateRef.current = onPlaybackUpdate;
+  }, [onPlaybackUpdate]);
+
+  const isInitialMountRef = useRef(true);
+  const lastSyncTimeRef = useRef(0);
+  useEffect(() => {
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      return;
+    }
+    const now = Date.now();
+    if (onPlaybackUpdateRef.current && (now - lastSyncTimeRef.current > 1000 || !isPlaying)) {
+      lastSyncTimeRef.current = now;
+      onPlaybackUpdateRef.current({
+        positionMillis,
+        durationMillis,
+        isPlaying,
+      });
+    }
+  }, [positionMillis, durationMillis, isPlaying]);
+
+  const handleMinimize = async () => {
+    try {
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+    } catch (e) {}
+    if (onMinimize) {
+      onMinimize({
+        positionMillis: stateRef.current.positionMillis,
+        durationMillis: stateRef.current.durationMillis,
+        isPlaying: stateRef.current.isPlaying,
+      });
+    }
+  };
+
+  // 1. YouTube starts in PORTRAIT mode, while Cinema Movies start in LANDSCAPE mode
   useEffect(() => {
     let isMounted = true;
 
-    async function setLandscapeMode() {
+    // Small delay to ensure initial render/insertion effects complete before window dimensions lock
+    const lockTimer = setTimeout(async () => {
       try {
-        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-        if (isMounted) setIsLandscape(true);
+        if (ytVideoId) {
+          // YouTube starts in PORTRAIT mode (just like official YouTube app)
+          await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+          if (isMounted) setIsLandscape(false);
+        } else {
+          // Movies start in landscape mode
+          await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
+          if (isMounted) setIsLandscape(true);
+        }
       } catch (e) {
         console.log('Orientation lock error:', e.message);
       }
-    }
-
-    setLandscapeMode();
+    }, 50);
 
     const dimSubscription = Dimensions.addEventListener('change', ({ window }) => {
       if (isMounted) {
@@ -131,16 +421,21 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
 
     return () => {
       isMounted = false;
+      clearTimeout(lockTimer);
       dimSubscription?.remove();
-      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => { });
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
     };
-  }, []);
+  }, [ytVideoId]);
 
-  // 2. Hardware Back Button Handling (Prevents closing entire app)
+  // 2. Hardware Back Button Handling (Minimizes to pop-up instead of hard closing)
   useEffect(() => {
     const onBackPress = () => {
       if (showSettingsModal) {
         setShowSettingsModal(false);
+        return true;
+      }
+      if (onMinimize) {
+        handleMinimize();
         return true;
       }
       handleClose();
@@ -149,7 +444,7 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
 
     const backSubscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => backSubscription.remove();
-  }, [showSettingsModal]);
+  }, [showSettingsModal, onMinimize]);
 
   // 3. Auto Resume Playback Position from userStore
   useEffect(() => {
@@ -256,8 +551,39 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
     setInWatchLater(next);
   };
 
+  const handleChannelPress = async () => {
+    if (!movieObj?.channel) return;
+    const channelQuery = movieObj.channel.trim();
+    const channelUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(channelQuery)}`;
+    try {
+      await Linking.openURL(channelUrl);
+    } catch (e) {
+      console.log('Error opening channel URL:', e.message);
+    }
+  };
+
+  const handleFullScreenChange = useCallback(async (isFullScreen) => {
+    try {
+      zoomScale.setValue(1);
+      currentScaleRef.current = 1.0;
+      if (isFullScreen) {
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
+        setIsLandscape(true);
+      } else {
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+        setIsLandscape(false);
+      }
+    } catch (e) {
+      console.log('Error handling YouTube fullscreen change:', e.message);
+    }
+  }, []);
+
   const handlePlayPause = async () => {
     resetControlsTimer();
+    if (ytVideoId) {
+      setIsPlaying((prev) => !prev);
+      return;
+    }
     if (!videoRef.current) return;
     try {
       if (isPlaying) {
@@ -275,6 +601,17 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
   // Fixed Seek with seamless auto-resume, accurate live position and zero stalling
   const handleSeek = async (offsetMillis) => {
     resetControlsTimer();
+    if (ytVideoId && ytPlayerRef.current) {
+      try {
+        const currentTime = await ytPlayerRef.current.getCurrentTime();
+        const newTime = Math.max(0, currentTime + offsetMillis / 1000);
+        ytPlayerRef.current.seekTo(newTime, true);
+        const newMs = newTime * 1000;
+        stateRef.current.positionMillis = newMs;
+        setPositionMillis(newMs);
+      } catch (e) {}
+      return;
+    }
     if (!videoRef.current) return;
     try {
       let currentPos = stateRef.current.positionMillis || 0;
@@ -355,6 +692,8 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
 
   const toggleOrientation = async () => {
     resetControlsTimer();
+    zoomScale.setValue(1);
+    currentScaleRef.current = 1.0;
     try {
       if (isLandscape) {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
@@ -478,7 +817,47 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
     return `${minutes < 10 ? '0' : ''}${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
   };
 
-  // 3. PanResponder for All Video Gestures
+  // Dedicated PanResponder for YouTube Pinch-to-Zoom (Activates ONLY for 2 touches, leaving 1-finger touches untouched)
+  const ytPinchPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: (evt) => {
+        return evt.nativeEvent.touches && evt.nativeEvent.touches.length === 2;
+      },
+      onStartShouldSetPanResponderCapture: (evt) => {
+        return evt.nativeEvent.touches && evt.nativeEvent.touches.length === 2;
+      },
+      onMoveShouldSetPanResponder: (evt) => {
+        return evt.nativeEvent.touches && evt.nativeEvent.touches.length === 2;
+      },
+      onMoveShouldSetPanResponderCapture: (evt) => {
+        return evt.nativeEvent.touches && evt.nativeEvent.touches.length === 2;
+      },
+      onPanResponderGrant: (evt) => {
+        if (evt.nativeEvent.touches && evt.nativeEvent.touches.length === 2) {
+          isPinchingRef.current = true;
+          pinchStartDistRef.current = getPinchDistance(evt.nativeEvent.touches);
+          pinchStartScaleRef.current = currentScaleRef.current;
+        }
+      },
+      onPanResponderMove: (evt) => {
+        handlePinchMove(evt);
+      },
+      onPanResponderRelease: () => {
+        if (isPinchingRef.current) {
+          isPinchingRef.current = false;
+          finalizeZoom();
+        }
+      },
+      onPanResponderTerminate: () => {
+        if (isPinchingRef.current) {
+          isPinchingRef.current = false;
+          finalizeZoom();
+        }
+      },
+    })
+  ).current;
+
+  // 3. PanResponder for All Video Gestures (Seek, Volume, Brightness & 2-finger Pinch)
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -486,6 +865,13 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
         return Math.abs(gestureState.dx) > 6 || Math.abs(gestureState.dy) > 6;
       },
       onPanResponderGrant: (evt) => {
+        if (evt.nativeEvent.touches && evt.nativeEvent.touches.length === 2) {
+          isPinchingRef.current = true;
+          pinchStartDistRef.current = getPinchDistance(evt.nativeEvent.touches);
+          pinchStartScaleRef.current = currentScaleRef.current;
+          return;
+        }
+
         const touchX = evt.nativeEvent.pageX;
         const touchY = evt.nativeEvent.pageY;
         const screenWidth = stateRef.current.dimensions.width;
@@ -505,7 +891,12 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
           hudTimeoutRef.current = null;
         }
       },
-      onPanResponderMove: (_, gestureState) => {
+      onPanResponderMove: (evt, gestureState) => {
+        if (isPinchingRef.current || (evt.nativeEvent.touches && evt.nativeEvent.touches.length === 2)) {
+          handlePinchMove(evt);
+          return;
+        }
+
         const { dx, dy } = gestureState;
         const { isRightSide, initialVolume, initialBrightness, initialPosition } = initialTouchRef.current;
         const { dimensions: dims, durationMillis: dur } = stateRef.current;
@@ -554,6 +945,12 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
         }
       },
       onPanResponderRelease: async (evt, gestureState) => {
+        if (isPinchingRef.current) {
+          isPinchingRef.current = false;
+          finalizeZoom();
+          return;
+        }
+
         const gesture = initialTouchRef.current.gestureType;
         initialTouchRef.current.gestureType = null; // Always reset gesture type immediately
 
@@ -623,6 +1020,10 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
         }
       },
       onPanResponderTerminate: () => {
+        if (isPinchingRef.current) {
+          isPinchingRef.current = false;
+          finalizeZoom();
+        }
         initialTouchRef.current.gestureType = null;
         setActiveGesture(null);
       },
@@ -639,33 +1040,169 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
     return 'volume-high';
   };
 
+  const ytVideoHeight = isLandscape
+    ? dimensions.height
+    : Math.round((dimensions.width * 9) / 16);
+  const ytVideoWidth = dimensions.width;
+
   return (
     <View style={styles.container}>
-      <StatusBar hidden />
+      <StatusBar hidden={isLandscape} barStyle="light-content" />
 
-      <View style={styles.videoWrapper} {...panResponder.panHandlers}>
-        {/* Native 16:9 Movie Cinema Video Player */}
-        <Video
-          ref={videoRef}
-          style={styles.video}
-          source={{
-            uri: activeStream,
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-              ...(referer ? { 'Referer': referer } : {})
+      <View
+        style={[
+          styles.videoWrapper,
+          ytVideoId && !isLandscape && {
+            height: ytVideoHeight,
+            flex: 0,
+            width: ytVideoWidth,
+          },
+        ]}
+        {...(ytVideoId ? ytPinchPanResponder.panHandlers : panResponder.panHandlers)}
+      >
+        {/* Pinch-to-Zoom Animated Container (Zoom to Fill & Original Aspect Ratio) */}
+        <Animated.View
+          style={[
+            styles.zoomContainer,
+            {
+              transform: [{ scale: zoomScale }],
             },
-            overrideFileExtensionAndroid: 'm3u8'
-          }}
-          rate={playbackRate}
-          isMuted={isMuted}
-          volume={volume}
-          resizeMode={resizeMode}
-          shouldPlay={true}
-          isLooping={false}
-          useNativeControls={false}
-          onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
-          onError={handleVideoError}
-        />
+          ]}
+        >
+          {/* Cinema Video Player: YouTube Iframe or Expo-AV */}
+          {ytVideoId ? (
+            <View style={[styles.video, ytVideoId && !isLandscape && { height: ytVideoHeight }]}>
+              <YoutubePlayer
+                ref={ytPlayerRef}
+                height={ytVideoHeight}
+                width={ytVideoWidth}
+                play={isPlaying}
+                forceAndroidAutoplay={true}
+                videoId={ytVideoId}
+                playbackRate={playbackRate}
+                volume={isMuted ? 0 : Math.round(volume * 100)}
+                onReady={() => {
+                  setIsPlaying(true);
+                  setIsBuffering(false);
+                }}
+                onFullScreenChange={handleFullScreenChange}
+                onChangeState={(state) => {
+                  if (state === 'playing') {
+                    setIsPlaying(true);
+                    setIsBuffering(false);
+                  } else if (state === 'paused') {
+                    setIsPlaying(false);
+                    setIsBuffering(false);
+                  } else if (state === 'buffering') {
+                    // YouTube already has its own buffering spinner, do not show app overlay
+                  } else if (state === 'ended') {
+                    setIsPlaying(false);
+                    setShowControls(true);
+                    setIsBuffering(false);
+                  }
+                }}
+                onError={(e) => {
+                  console.log('YouTube player error:', e);
+                  setHasError(true);
+                  setErrorMessage('YouTube video playback error');
+                }}
+                useLocalHTML={true}
+                baseUrlOverride="https://www.youtube-nocookie.com"
+                initialPlayerParams={{
+                  preventFullScreen: false,
+                  controls: true,
+                  rel: false,
+                  modestbranding: true,
+                  playsinline: true,
+                  autoplay: true,
+                }}
+                webViewProps={{
+                  injectedJavaScriptBeforeContentLoaded: YOUTUBE_ADBLOCK_INJECTED_JS,
+                  injectedJavaScript: YOUTUBE_ADBLOCK_INJECTED_JS,
+                  allowsInlineMediaPlayback: true,
+                  mediaPlaybackRequiresUserAction: false,
+                  androidLayerType: 'hardware',
+                  onShouldStartLoadWithRequest: (request) => {
+                    const url = (request.url || '').toLowerCase();
+                    if (
+                      url.includes('doubleclick.net') ||
+                      url.includes('googleads') ||
+                      url.includes('/pagead/') ||
+                      url.includes('/api/stats/ads') ||
+                      url.includes('googlesyndication.com') ||
+                      url.includes('adservice.google.com')
+                    ) {
+                      return false;
+                    }
+                    return true;
+                  },
+                }}
+              />
+            </View>
+          ) : (
+            <Video
+              ref={videoRef}
+              style={styles.video}
+              source={{
+                uri: activeStream,
+                headers: {
+                  'User-Agent':
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                  ...(referer ? { Referer: referer } : {}),
+                },
+                ...(!activeStream.includes('.mp4') ? { overrideFileExtensionAndroid: 'm3u8' } : {}),
+              }}
+              rate={playbackRate}
+              isMuted={isMuted}
+              volume={volume}
+              resizeMode={resizeMode}
+              shouldPlay={true}
+              isLooping={false}
+              useNativeControls={false}
+              onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
+              onError={handleVideoError}
+            />
+          )}
+        </Animated.View>
+
+        {/* Landscape Mode Back Button for YouTube */}
+        {ytVideoId && isLandscape && (
+          <TouchableOpacity
+            style={styles.ytLandscapeBackBtn}
+            onPress={toggleOrientation}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="arrow-back" size={22} color="#ffffff" />
+          </TouchableOpacity>
+        )}
+
+        {/* YouTube-Style Pinch-to-Zoom Toast Badge */}
+        {zoomToast && (
+          <Animated.View
+            style={[
+              styles.zoomToastBadge,
+              {
+                opacity: zoomToastAnim,
+                transform: [
+                  {
+                    translateY: zoomToastAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [-16, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}
+            pointerEvents="none"
+          >
+            <Ionicons
+              name={zoomToast.isZoomed ? 'expand-outline' : 'contract-outline'}
+              size={18}
+              color="#ffffff"
+            />
+            <Text style={styles.zoomToastText}>{zoomToast.text}</Text>
+          </Animated.View>
+        )}
 
         {/* Real-time Brightness Dimmer Overlay */}
         <View
@@ -774,8 +1311,8 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
           </View>
         )}
 
-        {/* Buffering Indicator - ONLY show when not playing AND actively buffering */}
-        {isBuffering && !isPlaying && !hasError && !activeGesture && (
+        {/* Buffering Indicator - ONLY show when not playing AND actively buffering (Never on YouTube) */}
+        {isBuffering && !isPlaying && !hasError && !activeGesture && !ytVideoId && (
           <View style={styles.bufferingOverlay} pointerEvents="none">
             <ActivityIndicator size="large" color={Colors.primary} />
             <Text style={styles.bufferingText}>Buffering VIP Stream...</Text>
@@ -801,17 +1338,17 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
           </View>
         )}
 
-        {/* Touch Overlay Cinema Controls */}
-        {showControls && !hasError && (
+        {/* Touch Overlay Cinema Controls - Only used for Cinema movies, NEVER on YouTube */}
+        {showControls && !hasError && !ytVideoId && (
           <View style={styles.controlsOverlay} pointerEvents="box-none">
             {/* Top Navigation Bar */}
             <View style={styles.topBar}>
               <TouchableOpacity
                 style={styles.controlIconBtn}
-                onPress={handleClose}
+                onPress={onMinimize ? handleMinimize : handleClose}
                 activeOpacity={0.7}
               >
-                <Ionicons name="arrow-back" size={24} color="#ffffff" />
+                <Ionicons name={onMinimize ? 'chevron-down' : 'arrow-back'} size={26} color="#ffffff" />
               </TouchableOpacity>
 
               <View style={styles.titleContainer}>
@@ -824,6 +1361,17 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
               </View>
 
               <View style={styles.topRightActions}>
+                {/* Pop-up / Minimize to MiniPlayer Button */}
+                {onMinimize && (
+                  <TouchableOpacity
+                    style={styles.controlIconBtn}
+                    onPress={handleMinimize}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="contract-outline" size={20} color="#ffffff" />
+                  </TouchableOpacity>
+                )}
+
                 {/* Like Button in Player */}
                 <TouchableOpacity
                   style={styles.controlIconBtn}
@@ -883,6 +1431,15 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
                   activeOpacity={0.7}
                 >
                   <Ionicons name="settings-outline" size={20} color="#ffffff" />
+                </TouchableOpacity>
+
+                {/* Direct Close Button */}
+                <TouchableOpacity
+                  style={styles.controlIconBtn}
+                  onPress={handleClose}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="close" size={22} color="#ffffff" />
                 </TouchableOpacity>
               </View>
             </View>
@@ -960,6 +1517,104 @@ export const VideoPlayer = ({ streamUrl, title, referer, movie, onClose }) => {
           </View>
         )}
       </View>
+
+      {/* Portrait Details View for YouTube (when not in landscape) */}
+      {ytVideoId && !isLandscape && (
+        <ScrollView style={[styles.portraitDetailsScroll, { backgroundColor: colors.background }]} showsVerticalScrollIndicator={false}>
+          <View style={styles.portraitDetailsContent}>
+            {/* Title */}
+            <Text style={[styles.portraitTitle, { color: colors.onSurface }]}>{cleanMovieTitle(movieObj.title)}</Text>
+
+            {/* Meta info: views & date */}
+            <View style={styles.portraitMetaRow}>
+              {movieObj.views ? <Text style={styles.portraitViews}>{movieObj.views}</Text> : null}
+              {movieObj.views && movieObj.year ? <Text style={styles.portraitDot}>•</Text> : null}
+              {movieObj.year ? <Text style={styles.portraitDate}>{movieObj.year}</Text> : null}
+              <View style={styles.portraitVipBadge}>
+                <Text style={styles.portraitVipText}>⚡ AD-FREE VIP</Text>
+              </View>
+            </View>
+
+            {/* Channel info - Clickable to open Channel on YouTube */}
+            <TouchableOpacity
+              style={[styles.portraitChannelRow, { borderColor: colors.outlineVariant }]}
+              onPress={handleChannelPress}
+              activeOpacity={0.7}
+            >
+              <View style={styles.portraitAvatar}>
+                <Text style={styles.portraitAvatarText}>
+                  {(movieObj.channel && movieObj.channel.charAt(0).toUpperCase()) || 'Y'}
+                </Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Text style={[styles.portraitChannelName, { color: colors.onSurface }]}>{movieObj.channel || 'YouTube Channel'}</Text>
+                  <Ionicons name="open-outline" size={13} color={colors.primary} style={{ marginLeft: 5 }} />
+                </View>
+                <Text style={styles.portraitChannelSub}>Official Channel • Tap to Visit</Text>
+              </View>
+              <View style={styles.visitChannelBadge}>
+                <Text style={styles.visitChannelBadgeText}>Visit Channel</Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Action Buttons: Clean Icon Buttons (Close, Like, Save) */}
+            <View style={styles.portraitActionButtonsRow}>
+              {/* Close Button */}
+              <TouchableOpacity
+                style={styles.portraitIconActionBtnPrimary}
+                onPress={onMinimize ? handleMinimize : handleClose}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="close-circle-outline" size={20} color="#ffffff" />
+                <Text style={styles.portraitIconActionLabel}>Close</Text>
+              </TouchableOpacity>
+
+              {/* Like Button */}
+              <TouchableOpacity
+                style={styles.portraitIconActionBtn}
+                onPress={handleToggleLike}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={isLiked ? 'heart' : 'heart-outline'}
+                  size={20}
+                  color={isLiked ? '#ef4444' : '#ffffff'}
+                />
+                <Text style={[styles.portraitIconActionLabel, isLiked && { color: '#ef4444' }]}>
+                  {isLiked ? 'Liked' : 'Like'}
+                </Text>
+              </TouchableOpacity>
+
+              {/* Save Button */}
+              <TouchableOpacity
+                style={styles.portraitIconActionBtn}
+                onPress={handleToggleWatchLater}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={inWatchLater ? 'bookmark' : 'bookmark-outline'}
+                  size={20}
+                  color={inWatchLater ? Colors.primary : '#ffffff'}
+                />
+                <Text style={[styles.portraitIconActionLabel, inWatchLater && { color: Colors.primary }]}>
+                  {inWatchLater ? 'Saved' : 'Save'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Description */}
+            {movieObj.description ? (
+              <View style={[styles.portraitDescBox, { backgroundColor: colors.surfaceContainer, borderColor: colors.outlineVariant }]}>
+                <Text style={[styles.portraitDescTitle, { color: colors.onSurface }]}>About Video</Text>
+                <Text style={[styles.portraitDescText, { color: colors.textDim }]} numberOfLines={5}>
+                  {movieObj.description}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        </ScrollView>
+      )}
 
       {/* Stream Preferences Modal */}
       <Modal
@@ -1101,6 +1756,182 @@ const styles = StyleSheet.create({
     backgroundColor: '#000000',
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+  },
+  zoomContainer: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  zoomToastBadge: {
+    position: 'absolute',
+    top: 26,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(28, 28, 30, 0.92)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    gap: 8,
+    zIndex: 999,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  zoomToastText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  portraitDetailsScroll: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  portraitDetailsContent: {
+    padding: 16,
+    paddingBottom: 40,
+  },
+  portraitTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#ffffff',
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  portraitMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    marginBottom: 14,
+  },
+  portraitViews: {
+    fontSize: 12,
+    color: Colors.textDim,
+    fontWeight: '600',
+  },
+  portraitDot: {
+    fontSize: 12,
+    color: Colors.textDim,
+    marginHorizontal: 6,
+  },
+  portraitDate: {
+    fontSize: 12,
+    color: Colors.textDim,
+    fontWeight: '500',
+  },
+  portraitVipBadge: {
+    backgroundColor: 'rgba(255, 0, 0, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 0, 0.3)',
+    marginLeft: 10,
+  },
+  portraitVipText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#FF3B30',
+  },
+  portraitChannelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    marginBottom: 16,
+  },
+  portraitAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 0, 0, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+    borderWidth: 1,
+    borderColor: '#FF0000',
+  },
+  portraitAvatarText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  portraitChannelName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  portraitChannelSub: {
+    fontSize: 11,
+    color: Colors.textDim,
+    marginTop: 1,
+  },
+  portraitActionButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 18,
+  },
+  portraitActionBtnPrimary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FF0000',
+    paddingVertical: 10,
+    borderRadius: 10,
+    shadowColor: '#FF0000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  portraitActionBtnTextPrimary: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  portraitActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    gap: 5,
+  },
+  portraitActionBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  portraitDescBox: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  portraitDescTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: 'rgba(255, 255, 255, 0.7)',
+    marginBottom: 4,
+  },
+  portraitDescText: {
+    fontSize: 12,
+    color: Colors.textDim,
+    lineHeight: 18,
   },
   video: {
     width: '100%',
@@ -1581,5 +2412,64 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     fontSize: 11,
     fontWeight: '600',
+  },
+  portraitIconActionBtnPrimary: {
+    flex: 1,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#e50914',
+    paddingVertical: 10,
+    borderRadius: 12,
+    shadowColor: '#e50914',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  portraitIconActionBtn: {
+    flex: 1,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.07)',
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  portraitIconActionLabel: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  visitChannelBadge: {
+    backgroundColor: 'rgba(229, 9, 20, 0.14)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 0.5,
+    borderColor: 'rgba(229, 9, 20, 0.4)',
+    marginLeft: 8,
+  },
+  visitChannelBadgeText: {
+    color: '#ff4d4f',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  ytLandscapeBackBtn: {
+    position: 'absolute',
+    top: 20,
+    left: 20,
+    zIndex: 9999,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
   },
 });

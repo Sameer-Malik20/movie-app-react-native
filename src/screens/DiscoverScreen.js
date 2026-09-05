@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { MovieCard } from '../components/MovieCard';
 import { fetchExploreMovies, searchMoviesApi } from '../services/api';
 import { Colors } from '../theme/colors';
+import { useTheme } from '../theme/ThemeContext';
 
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = (width - 40 - 14) / 2;
@@ -26,6 +27,7 @@ let globalDiscoverCache = {
 };
 
 export const DiscoverScreen = ({ onMovieSelect, initialCategory = 'latest' }) => {
+  const { isDark, colors } = useTheme();
   const [searchQuery, setSearchQuery] = useState(globalDiscoverCache.query);
   const [selectedCategory, setSelectedCategory] = useState(
     globalDiscoverCache.query ? globalDiscoverCache.category : (initialCategory || 'latest')
@@ -87,22 +89,30 @@ export const DiscoverScreen = ({ onMovieSelect, initialCategory = 'latest' }) =>
   }, [initialCategory]);
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Search Bar Input */}
       <View style={styles.searchHeader}>
-        <View style={styles.inputContainer}>
-          <Ionicons name="search" size={18} color={Colors.textDim} />
+        <View
+          style={[
+            styles.inputContainer,
+            {
+              backgroundColor: colors.surfaceContainer,
+              borderColor: colors.outlineVariant,
+            },
+          ]}
+        >
+          <Ionicons name="search" size={18} color={colors.textDim} />
           <TextInput
-            style={styles.searchInput}
+            style={[styles.searchInput, { color: colors.onSurface }]}
             placeholder="Search movie or paste link..."
-            placeholderTextColor={Colors.textDim}
+            placeholderTextColor={colors.textDim}
             value={searchQuery}
             onChangeText={handleSearch}
             returnKeyType="search"
           />
           {searchQuery.length > 0 && (
             <TouchableOpacity onPress={() => handleSearch('')} style={styles.clearBtn}>
-              <Ionicons name="close-circle" size={18} color={Colors.textDim} />
+              <Ionicons name="close-circle" size={18} color={colors.textDim} />
             </TouchableOpacity>
           )}
         </View>
@@ -121,11 +131,23 @@ export const DiscoverScreen = ({ onMovieSelect, initialCategory = 'latest' }) =>
               const isSelected = selectedCategory === item.key;
               return (
                 <TouchableOpacity
-                  style={[styles.chip, isSelected && styles.chipActive]}
+                  style={[
+                    styles.chip,
+                    {
+                      backgroundColor: isSelected ? colors.primaryContainer : colors.surfaceContainerLow,
+                      borderColor: isSelected ? colors.primary : colors.outlineVariant,
+                    },
+                  ]}
                   onPress={() => loadCategory(item.key)}
                   activeOpacity={0.7}
                 >
-                  <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>
+                  <Text
+                    style={[
+                      styles.chipText,
+                      { color: isSelected ? '#ffffff' : colors.textDim },
+                      isSelected && styles.chipTextActive,
+                    ]}
+                  >
                     {item.label}
                   </Text>
                 </TouchableOpacity>

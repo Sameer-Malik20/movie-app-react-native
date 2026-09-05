@@ -5,8 +5,10 @@ import { Top10Row } from '../components/Top10Row';
 import { MovieShelf } from '../components/MovieShelf';
 import { fetchExploreMovies } from '../services/api';
 import { Colors } from '../theme/colors';
+import { useTheme } from '../theme/ThemeContext';
 
 export const HomeScreen = ({ onMovieSelect, onPlayMovie, onSeeAllCategory }) => {
+  const { colors } = useTheme();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [latestMovies, setLatestMovies] = useState([]);
@@ -57,14 +59,14 @@ export const HomeScreen = ({ onMovieSelect, onPlayMovie, onSeeAllCategory }) => 
 
   return (
     <ScrollView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: colors.background }]}
       showsVerticalScrollIndicator={false}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
           onRefresh={onRefresh}
-          tintColor={Colors.primary}
-          colors={[Colors.primary]}
+          tintColor={colors.primary}
+          colors={[colors.primary]}
         />
       }
       contentContainerStyle={styles.scrollContent}

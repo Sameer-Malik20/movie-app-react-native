@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,22 +9,28 @@ import {
   ActivityIndicator,
   Image,
 } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Colors } from './src/theme/colors';
+import { ThemeProvider, useTheme } from './src/theme/ThemeContext';
 import { Header } from './src/components/Header';
 import { BottomNav } from './src/components/BottomNav';
 import { VideoPlayer } from './src/components/VideoPlayer';
+import { MiniPlayer } from './src/components/MiniPlayer';
 
 import { HomeScreen } from './src/screens/HomeScreen';
 import { DiscoverScreen } from './src/screens/DiscoverScreen';
+import { YouTubeScreen } from './src/screens/YouTubeScreen';
 import { MovieDetailScreen } from './src/screens/MovieDetailScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
 
 import { scrapeMovieDetails } from './src/services/api';
 
-export default function App() {
+function MainApp() {
+  const insets = useSafeAreaInsets();
+  const { isDark, colors } = useTheme();
   const [isSplashLoading, setIsSplashLoading] = useState(true);
   const splashFadeAnim = useRef(new Animated.Value(1)).current;
   const splashScaleAnim = useRef(new Animated.Value(0.9)).current;
@@ -32,6 +38,12 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('home');
   const [selectedMovie, setSelectedMovie] = useState(null);
   const [playingMovie, setPlayingMovie] = useState(null);
+  const [playerMode, setPlayerMode] = useState(null); // 'fullscreen' | 'mini' | null
+  const [playbackStatus, setPlaybackStatus] = useState({
+    isPlaying: true,
+    positionMillis: 0,
+    durationMillis: 0,
+  });
   const [discoverCategory, setDiscoverCategory] = useState('latest');
 
   // Splash Screen Display Timer & Animation
@@ -55,31 +67,41 @@ export default function App() {
     return () => clearTimeout(timer);
   }, []);
 
+  useEffect(() => {
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+  }, []);
+
   // Handle Android Hardware Back Button
   useEffect(() => {
     const onBackPress = () => {
-      // 1. If Video Player is open, close it
-      if (playingMovie) {
+      // 1. If Video Player is in fullscreen, minimize to floating pop-up
+      if (playingMovie && playerMode === 'fullscreen') {
+        setPlayerMode('mini');
+        return true;
+      }
+      // 2. If Mini Player is active, dismiss playback
+      if (playingMovie && playerMode === 'mini') {
+        setPlayerMode(null);
         setPlayingMovie(null);
         return true;
       }
-      // 2. If Movie Detail screen is open, go back to previous list
+      // 3. If Movie Detail screen is open, go back to previous list
       if (selectedMovie) {
         setSelectedMovie(null);
         return true;
       }
-      // 3. If on Discover or Profile tab, go to Home
+      // 4. If on another tab, return to Home
       if (activeTab !== 'home') {
         setActiveTab('home');
         return true;
       }
-      // 4. If on Home with nothing open, allow default exit
+      // 5. Default exit app
       return false;
     };
 
     const backSubscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
     return () => backSubscription.remove();
-  }, [playingMovie, selectedMovie, activeTab]);
+  }, [playingMovie, playerMode, selectedMovie, activeTab]);
 
   const handleMovieSelect = (movie) => {
     setSelectedMovie(movie);
@@ -87,13 +109,13 @@ export default function App() {
 
   const handlePlayMovie = async (movie) => {
     if (!movie) return;
-    if (movie.streamUrl) {
-      setPlayingMovie(movie);
+    setPlayingMovie(movie);
+    setPlayerMode('fullscreen');
+    setPlaybackStatus({ isPlaying: true, positionMillis: 0, durationMillis: 0 });
+
+    if (movie.streamUrl || movie.isYouTube) {
       return;
     }
-
-    // Set initial playing state so player opens immediately
-    setPlayingMovie(movie);
 
     if (movie.link) {
       try {
@@ -112,13 +134,53 @@ export default function App() {
     setActiveTab('discover');
   };
 
-  return (
-    <SafeAreaProvider>
-      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-        <StatusBar barStyle="light-content" backgroundColor={Colors.background} />
+  const handleClosePlayer = () => {
+    setPlayerMode(null);
+    setPlayingMovie(null);
+    setPlaybackStatus({ isPlaying: false, positionMillis: 0, durationMillis: 0 });
+  };
 
-        {/* Top Header (only show when not in detail or video player) */}
-        {!selectedMovie && !playingMovie && (
+  const handleMinimizePlayer = () => {
+    setPlayerMode('mini');
+  };
+
+  const handleExpandPlayer = () => {
+    setPlayerMode('fullscreen');
+  };
+
+  const handlePlaybackUpdate = useCallback((st) => {
+    if (!st) return;
+    setPlaybackStatus((prev) => {
+      const isPlaySame = prev.isPlaying === st.isPlaying;
+      const isPosClose = Math.abs((prev.positionMillis || 0) - (st.positionMillis || 0)) < 1000;
+      const isDurSame = prev.durationMillis === st.durationMillis;
+      if (isPlaySame && isPosClose && isDurSame) {
+        return prev;
+      }
+      return {
+        isPlaying: typeof st.isPlaying === 'boolean' ? st.isPlaying : prev.isPlaying,
+        positionMillis: typeof st.positionMillis === 'number' ? st.positionMillis : prev.positionMillis,
+        durationMillis: typeof st.durationMillis === 'number' ? st.durationMillis : prev.durationMillis,
+      };
+    });
+  }, []);
+
+  return (
+    <View
+      style={[
+        styles.safeArea,
+        {
+          backgroundColor: colors.background,
+          paddingTop: insets.top,
+          paddingLeft: insets.left,
+          paddingRight: insets.right,
+        },
+      ]}
+    >
+        <StatusBar barStyle={isDark ? "light-content" : "dark-content"} backgroundColor={colors.background} />
+
+        {/* Top Header (only show when not in detail or fullscreen player) */}
+        {!selectedMovie && playerMode !== 'fullscreen' && (
           <Header
             onSearchPress={() => setActiveTab('discover')}
             onProfilePress={() => setActiveTab('profile')}
@@ -126,7 +188,7 @@ export default function App() {
         )}
 
         {/* Main Content Screens */}
-        <View style={styles.contentContainer}>
+        <View style={[styles.contentContainer, { backgroundColor: colors.background }]}>
           {selectedMovie ? (
             <MovieDetailScreen
               movie={selectedMovie}
@@ -151,6 +213,13 @@ export default function App() {
                 />
               )}
 
+              {activeTab === 'youtube' && (
+                <YouTubeScreen
+                  onPlayMovie={handlePlayMovie}
+                  onMovieSelect={handleMovieSelect}
+                />
+              )}
+
               {activeTab === 'profile' && (
                 <ProfileScreen
                   onPlayMovie={handlePlayMovie}
@@ -161,19 +230,39 @@ export default function App() {
           )}
         </View>
 
+        {/* Floating Pop-up Mini-Player */}
+        {playingMovie && playerMode === 'mini' && (
+          <MiniPlayer
+            media={playingMovie}
+            isPlaying={playbackStatus.isPlaying}
+            progress={
+              playbackStatus.durationMillis > 0
+                ? playbackStatus.positionMillis / playbackStatus.durationMillis
+                : 0
+            }
+            onExpand={handleExpandPlayer}
+            onTogglePlay={() => {
+              setPlaybackStatus((prev) => ({ ...prev, isPlaying: !prev.isPlaying }));
+            }}
+            onClose={handleClosePlayer}
+          />
+        )}
+
         {/* Video Player Modal / Overlay */}
-        {playingMovie && (
+        {playingMovie && playerMode === 'fullscreen' && (
           <VideoPlayer
             movie={playingMovie}
             streamUrl={playingMovie.streamUrl}
             title={playingMovie.title}
             referer={playingMovie.referer}
-            onClose={() => setPlayingMovie(null)}
+            onClose={handleClosePlayer}
+            onMinimize={handleMinimizePlayer}
+            onPlaybackUpdate={handlePlaybackUpdate}
           />
         )}
 
         {/* Floating Glassmorphic Bottom Navigation */}
-        {!selectedMovie && !playingMovie && (
+        {!selectedMovie && playerMode !== 'fullscreen' && (
           <BottomNav
             activeTab={activeTab}
             onTabPress={setActiveTab}
@@ -225,7 +314,16 @@ export default function App() {
             </Animated.View>
           </Animated.View>
         )}
-      </SafeAreaView>
+      </View>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <ThemeProvider>
+        <MainApp />
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }

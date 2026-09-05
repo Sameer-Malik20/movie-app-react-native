@@ -3,21 +3,23 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-nati
 import { Ionicons } from '@expo/vector-icons';
 import { MovieCard } from './MovieCard';
 import { Colors } from '../theme/colors';
+import { useTheme } from '../theme/ThemeContext';
 
 export const MovieShelf = ({ title, movies, onMoviePress, onSeeAll, icon = 'flame' }) => {
+  const { colors } = useTheme();
   if (!movies || movies.length === 0) return null;
 
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
         <View style={styles.titleGroup}>
-          <Text style={styles.sectionTitle}>{title}</Text>
+          <Text style={[styles.sectionTitle, { color: colors.onSurface }]}>{title}</Text>
         </View>
 
         {onSeeAll && (
           <TouchableOpacity style={styles.seeAllBtn} onPress={onSeeAll} activeOpacity={0.7}>
-            <Text style={styles.seeAllText}>See All</Text>
-            <Ionicons name="chevron-forward" size={14} color={Colors.primary} />
+            <Text style={[styles.seeAllText, { color: colors.primary }]}>See All</Text>
+            <Ionicons name="chevron-forward" size={14} color={colors.primary} />
           </TouchableOpacity>
         )}
       </View>

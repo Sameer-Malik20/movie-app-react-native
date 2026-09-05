@@ -3,8 +3,10 @@ import { View, Text, StyleSheet, Image, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { cleanMovieTitle } from '../services/api';
 import { Colors } from '../theme/colors';
+import { useTheme } from '../theme/ThemeContext';
 
 export const MovieCard = ({ movie, onPress, width = 135, height = 195 }) => {
+  const { colors } = useTheme();
   const posterUrl = movie.poster || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=300&auto=format&fit=crop&q=80';
   const displayTitle = cleanMovieTitle(movie.title) || 'Movie Stream';
 
@@ -14,7 +16,7 @@ export const MovieCard = ({ movie, onPress, width = 135, height = 195 }) => {
       onPress={() => onPress(movie)}
       activeOpacity={0.75}
     >
-      <View style={[styles.posterWrap, { height }]}>
+      <View style={[styles.posterWrap, { height, backgroundColor: colors.surfaceContainerHighest, borderColor: colors.outlineVariant }]}>
         <Image
           source={{ uri: posterUrl }}
           style={styles.posterImage}
@@ -31,7 +33,7 @@ export const MovieCard = ({ movie, onPress, width = 135, height = 195 }) => {
         {/* IMDb Rating */}
         {movie.imdb ? (
           <View style={styles.badgeTopRight}>
-            <Ionicons name="star" size={10} color={Colors.gold} />
+            <Ionicons name="star" size={10} color={colors.gold} />
             <Text style={styles.ratingText}>{movie.imdb}</Text>
           </View>
         ) : null}
@@ -44,10 +46,10 @@ export const MovieCard = ({ movie, onPress, width = 135, height = 195 }) => {
         </View>
       </View>
 
-      <Text style={styles.titleText} numberOfLines={2}>
+      <Text style={[styles.titleText, { color: colors.onSurface }]} numberOfLines={2}>
         {displayTitle}
       </Text>
-      <Text style={styles.yearText} numberOfLines={1}>
+      <Text style={[styles.yearText, { color: colors.textDim }]} numberOfLines={1}>
         {movie.year || 'Movie'}
       </Text>
     </TouchableOpacity>

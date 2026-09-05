@@ -2,21 +2,35 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../theme/colors';
+import { useTheme } from '../theme/ThemeContext';
 
 export const BottomNav = ({ activeTab, onTabPress, onTabChange }) => {
+  const { isDark, colors } = useTheme();
   const handleTabPress = onTabPress || onTabChange || (() => {});
 
   const tabs = [
     { key: 'home', label: 'Home', icon: 'home-outline', iconActive: 'home' },
     { key: 'discover', label: 'Discover', icon: 'compass-outline', iconActive: 'compass' },
+    { key: 'youtube', label: 'YouTube', icon: 'logo-youtube', iconActive: 'logo-youtube', isYt: true },
     { key: 'profile', label: 'Profile', icon: 'person-outline', iconActive: 'person' },
   ];
 
   return (
     <View style={styles.container}>
-      <View style={styles.navBar}>
+      <View
+        style={[
+          styles.navBar,
+          {
+            backgroundColor: isDark ? 'rgba(18, 33, 49, 0.95)' : 'rgba(255, 255, 255, 0.96)',
+            borderColor: colors.outlineVariant,
+            shadowColor: isDark ? '#000000' : '#94a3b8',
+          },
+        ]}
+      >
         {tabs.map((tab) => {
           const isActive = activeTab === tab.key;
+          const activeColor = tab.isYt ? '#FF0000' : colors.primary;
+          const inactiveColor = colors.textDim;
           return (
             <TouchableOpacity
               key={tab.key}
@@ -27,12 +41,18 @@ export const BottomNav = ({ activeTab, onTabPress, onTabChange }) => {
               <Ionicons
                 name={isActive ? tab.iconActive : tab.icon}
                 size={22}
-                color={isActive ? Colors.primary : Colors.textDim}
+                color={isActive ? activeColor : inactiveColor}
               />
-              <Text style={[styles.tabLabel, isActive && styles.tabLabelActive]}>
+              <Text
+                style={[
+                  styles.tabLabel,
+                  { color: isActive ? activeColor : inactiveColor },
+                  isActive && { fontWeight: '800' },
+                ]}
+              >
                 {tab.label}
               </Text>
-              {isActive && <View style={styles.activeIndicator} />}
+              {isActive && <View style={[styles.activeIndicator, { backgroundColor: activeColor }]} />}
             </TouchableOpacity>
           );
         })}

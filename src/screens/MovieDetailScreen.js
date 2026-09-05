@@ -14,10 +14,12 @@ import { scrapeMovieDetails, fetchSimilarAndSequels, cleanMovieTitle } from '../
 import { userStore } from '../services/userStore';
 import { MovieShelf } from '../components/MovieShelf';
 import { Colors } from '../theme/colors';
+import { useTheme } from '../theme/ThemeContext';
 
 const { width } = Dimensions.get('window');
 
 export const MovieDetailScreen = ({ movie, onBack, onPlayMovie, onMovieSelect }) => {
+  const { isDark, colors } = useTheme();
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showFullSynopsis, setShowFullSynopsis] = useState(false);
@@ -116,7 +118,7 @@ export const MovieDetailScreen = ({ movie, onBack, onPlayMovie, onMovieSelect })
   const meta = details?.details || {};
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         {/* Backdrop Header */}
         <View style={styles.backdropWrap}>
@@ -165,7 +167,7 @@ export const MovieDetailScreen = ({ movie, onBack, onPlayMovie, onMovieSelect })
 
         {/* Details Section */}
         <View style={styles.infoSection}>
-          <Text style={styles.titleText}>{currentMovie.title}</Text>
+          <Text style={[styles.titleText, { color: colors.onSurface }]}>{currentMovie.title}</Text>
 
           {/* Meta Badges */}
           <View style={styles.metaRow}>
@@ -237,47 +239,47 @@ export const MovieDetailScreen = ({ movie, onBack, onPlayMovie, onMovieSelect })
           </View>
 
           {/* Synopsis */}
-          <View style={styles.synopsisCard}>
-            <Text style={styles.sectionHeading}>Synopsis</Text>
+          <View style={[styles.synopsisCard, { backgroundColor: colors.surfaceContainer, borderColor: colors.outlineVariant }]}>
+            <Text style={[styles.sectionHeading, { color: colors.onSurface }]}>Synopsis</Text>
             <Text
-              style={styles.synopsisText}
+              style={[styles.synopsisText, { color: colors.textDim }]}
               numberOfLines={showFullSynopsis ? undefined : 3}
             >
               {currentMovie.description ||
                 'Experience high octane cinema in crystal clear high definition, free of intrusive advertisements and popups. Streaming with Dolby audio and multiple quality profiles.'}
             </Text>
             <TouchableOpacity onPress={() => setShowFullSynopsis(!showFullSynopsis)}>
-              <Text style={styles.readMoreText}>
+              <Text style={[styles.readMoreText, { color: colors.primary }]}>
                 {showFullSynopsis ? 'Show Less' : 'Read More'}
               </Text>
             </TouchableOpacity>
           </View>
 
           {/* Movie Details & Metadata */}
-          <View style={styles.castSection}>
-            <Text style={styles.sectionHeading}>Movie Information</Text>
+          <View style={[styles.castSection, { backgroundColor: colors.surfaceContainer, borderColor: colors.outlineVariant }]}>
+            <Text style={[styles.sectionHeading, { color: colors.onSurface }]}>Movie Information</Text>
             <View style={styles.detailGrid}>
               {meta.Genre && (
                 <View style={styles.gridItem}>
-                  <Text style={styles.gridLabel}>Genre</Text>
-                  <Text style={styles.gridValue}>{meta.Genre}</Text>
+                  <Text style={[styles.gridLabel, { color: colors.textDim }]}>Genre</Text>
+                  <Text style={[styles.gridValue, { color: colors.onSurface }]}>{meta.Genre}</Text>
                 </View>
               )}
               {meta.Director && (
                 <View style={styles.gridItem}>
-                  <Text style={styles.gridLabel}>Director</Text>
-                  <Text style={styles.gridValue}>{meta.Director}</Text>
+                  <Text style={[styles.gridLabel, { color: colors.textDim }]}>Director</Text>
+                  <Text style={[styles.gridValue, { color: colors.onSurface }]}>{meta.Director}</Text>
                 </View>
               )}
               {meta.Cast && (
                 <View style={styles.gridItem}>
-                  <Text style={styles.gridLabel}>Cast</Text>
-                  <Text style={styles.gridValue}>{meta.Cast}</Text>
+                  <Text style={[styles.gridLabel, { color: colors.textDim }]}>Cast</Text>
+                  <Text style={[styles.gridValue, { color: colors.onSurface }]}>{meta.Cast}</Text>
                 </View>
               )}
               <View style={styles.gridItem}>
-                <Text style={styles.gridLabel}>Audio & Video</Text>
-                <Text style={styles.gridValue}>Stereo / Dolby 5.1 • 1080p FHD HLS</Text>
+                <Text style={[styles.gridLabel, { color: colors.textDim }]}>Audio & Video</Text>
+                <Text style={[styles.gridValue, { color: colors.onSurface }]}>Stereo / Dolby 5.1 • 1080p FHD HLS</Text>
               </View>
             </View>
           </View>

@@ -15,11 +15,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { userStore } from '../services/userStore';
 import { getSiteDomain, setSiteDomain, providerManager, PROVIDER_PRESETS, cleanMovieTitle } from '../services/api';
 import { Colors } from '../theme/colors';
+import { useTheme } from '../theme/ThemeContext';
 
 // In-memory cache to preserve active tab (History | Likes | Watch Later) across back navigation
 let cachedProfileTab = 'history';
 
 export const ProfileScreen = ({ onPlayMovie, onMovieSelect }) => {
+  const { isDark, colors, setTheme } = useTheme();
   const [siteUrl, setSiteUrl] = useState(getSiteDomain());
   const [activeTab, setActiveTabState] = useState(cachedProfileTab); // 'history' | 'likes' | 'watchLater'
 
@@ -101,22 +103,22 @@ export const ProfileScreen = ({ onPlayMovie, onMovieSelect }) => {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 70 : 0}
     >
       <ScrollView
-        style={styles.container}
+        style={[styles.container, { backgroundColor: colors.background }]}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
         {/* Profile Header Card */}
-        <View style={styles.profileCard}>
+        <View style={[styles.profileCard, { backgroundColor: colors.surfaceContainer, borderColor: colors.outlineVariant }]}>
         <Image
           source={require('../../assets/icon.png')}
-          style={styles.avatar}
+          style={[styles.avatar, { borderColor: colors.primary }]}
           resizeMode="cover"
         />
-        <Text style={styles.userName}>VIP Cinema Member</Text>
-        <Text style={styles.userEmail}>adfree.vip@cinepremium.stream</Text>
+        <Text style={[styles.userName, { color: colors.onSurface }]}>VIP Cinema Member</Text>
+        <Text style={[styles.userEmail, { color: colors.textDim }]}>adfree.vip@cinepremium.stream</Text>
 
-        <View style={[styles.tierPill, { backgroundColor: Colors.primaryContainer }]}>
+        <View style={[styles.tierPill, { backgroundColor: colors.primaryContainer }]}>
           <Ionicons name="sparkles" size={14} color="#ffffff" />
           <Text style={styles.tierText}>UNIVERSAL STREAM ENGINE READY</Text>
         </View>
@@ -400,6 +402,80 @@ export const ProfileScreen = ({ onPlayMovie, onMovieSelect }) => {
             </View>
           </View>
         )}
+      </View>
+
+      {/* App Appearance / Theme Mode (Dark & Light) */}
+      <View style={[styles.sectionCard, { backgroundColor: colors.surfaceContainer, borderColor: colors.outlineVariant, marginTop: 16 }]}>
+        <Text style={[styles.sectionTitle, { color: colors.onSurface }]}>
+          <Ionicons name="color-palette-outline" size={16} color={colors.primary} /> App Appearance
+        </Text>
+        <Text style={[styles.sectionDesc, { color: colors.textDim }]}>
+          Switch between Dark OLED Mode for cinema immersion and Light Mode for daytime clarity.
+        </Text>
+
+        <View style={styles.themeGrid}>
+          {/* Dark Mode Card */}
+          <TouchableOpacity
+            style={[
+              styles.themeOptionCard,
+              {
+                backgroundColor: isDark ? (isDark ? 'rgba(208, 188, 255, 0.12)' : colors.surfaceContainerHighest) : colors.surfaceContainerLow,
+                borderColor: isDark ? colors.primary : colors.outlineVariant,
+              },
+              isDark && styles.themeOptionCardActive,
+            ]}
+            onPress={() => setTheme('dark')}
+            activeOpacity={0.8}
+          >
+            <View style={styles.themeOptionHeader}>
+              <View style={[styles.themeIconCircle, { backgroundColor: 'rgba(208, 188, 255, 0.18)' }]}>
+                <Ionicons name="moon" size={20} color={isDark ? colors.primary : colors.textDim} />
+              </View>
+              {isDark && (
+                <View style={[styles.themeActiveDot, { backgroundColor: colors.primary }]}>
+                  <Ionicons name="checkmark" size={11} color="#ffffff" />
+                </View>
+              )}
+            </View>
+            <Text style={[styles.themeOptionTitle, { color: colors.onSurface }, isDark && { color: colors.primary, fontWeight: '800' }]}>
+              Dark Mode
+            </Text>
+            <Text style={[styles.themeOptionSubtitle, { color: colors.textDim }]}>
+              OLED cinematic navy
+            </Text>
+          </TouchableOpacity>
+
+          {/* Light Mode Card */}
+          <TouchableOpacity
+            style={[
+              styles.themeOptionCard,
+              {
+                backgroundColor: !isDark ? 'rgba(124, 58, 237, 0.1)' : colors.surfaceContainerLow,
+                borderColor: !isDark ? colors.primary : colors.outlineVariant,
+              },
+              !isDark && styles.themeOptionCardActive,
+            ]}
+            onPress={() => setTheme('light')}
+            activeOpacity={0.8}
+          >
+            <View style={styles.themeOptionHeader}>
+              <View style={[styles.themeIconCircle, { backgroundColor: 'rgba(251, 191, 36, 0.2)' }]}>
+                <Ionicons name="sunny" size={20} color={!isDark ? '#fbbf24' : colors.textDim} />
+              </View>
+              {!isDark && (
+                <View style={[styles.themeActiveDot, { backgroundColor: colors.primary }]}>
+                  <Ionicons name="checkmark" size={11} color="#ffffff" />
+                </View>
+              )}
+            </View>
+            <Text style={[styles.themeOptionTitle, { color: colors.onSurface }, !isDark && { color: colors.primary, fontWeight: '800' }]}>
+              Light Mode
+            </Text>
+            <Text style={[styles.themeOptionSubtitle, { color: colors.textDim }]}>
+              Clean bright slate
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <View style={{ height: 220 }} />
@@ -723,5 +799,52 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '700',
     fontSize: 12,
+  },
+  themeGrid: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 4,
+  },
+  themeOptionCard: {
+    flex: 1,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1.5,
+  },
+  themeOptionCardActive: {
+    shadowColor: Colors.primaryContainer,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  themeOptionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  themeIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  themeActiveDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  themeOptionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  themeOptionSubtitle: {
+    fontSize: 10,
+    fontWeight: '500',
   },
 });
